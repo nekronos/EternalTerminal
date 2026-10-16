@@ -202,6 +202,53 @@ TEST_CASE("PortForwardHandler removes its generated socket directory",
   CHECK_FALSE(fs::exists(fs::path(sourceName).parent_path()));
 }
 
+// ssh-agent-switcher only finds agents at sshd's /tmp/ssh-*/agent.* layout.
+TEST_CASE("PortForwardHandler names agent sockets like sshd",
+          "[PortForwardHandler]") {
+  auto networkHandler = make_shared<FakePortForwardSocketHandler>();
+  auto pipeHandler = make_shared<PipeSocketHandler>();
+  PortForwardHandler handler(networkHandler, pipeHandler);
+  PortForwardSourceRequest request;
+  request.mutable_destination()->set_name("/unused/destination");
+  request.set_environmentvariable("SSH_AUTH_SOCK");
+  string sourceName;
+  auto response =
+      handler.createSource(request, &sourceName, getuid(), getgid());
+  REQUIRE_FALSE(response.has_error());
+
+  // Expect /tmp/ssh-XXXXXX/agent.<pid>, a socket in a private directory.
+  const fs::path source(sourceName);
+  const fs::path directory = source.parent_path();
+  CHECK(directory.parent_path() == fs::path(GetTempDirectory()).parent_path());
+  CHECK(directory.filename().string().rfind("ssh-", 0) == 0);
+  CHECK(source.filename().string() == "agent." + std::to_string(getpid()));
+  CHECK(fs::is_socket(source));
+
+  struct stat st;
+  REQUIRE(::stat(directory.c_str(), &st) == 0);
+  CHECK(st.st_uid == getuid());
+  CHECK((st.st_mode & 0777) == 0700);
+}
+
+TEST_CASE("PortForwardHandler keeps generic names for other variables",
+          "[PortForwardHandler]") {
+  auto networkHandler = make_shared<FakePortForwardSocketHandler>();
+  auto pipeHandler = make_shared<PipeSocketHandler>();
+  PortForwardHandler handler(networkHandler, pipeHandler);
+  PortForwardSourceRequest request;
+  request.mutable_destination()->set_name("/unused/destination");
+  request.set_environmentvariable("OTHER_SOCK");
+  string sourceName;
+  auto response =
+      handler.createSource(request, &sourceName, getuid(), getgid());
+  REQUIRE_FALSE(response.has_error());
+
+  const fs::path source(sourceName);
+  CHECK(source.parent_path().filename().string().rfind("et_forward_sock_", 0) ==
+        0);
+  CHECK(source.filename().string() == "sock");
+}
+
 TEST_CASE("PortForwardHandler preserves user-specified socket directories",
           "[PortForwardHandler]") {
   string pattern = GetTempDirectory() + "et_forward_test_XXXXXX";
