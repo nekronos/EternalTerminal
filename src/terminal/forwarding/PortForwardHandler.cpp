@@ -8,6 +8,8 @@
 namespace et {
 namespace {
 
+const string AGENT_ENV_VAR = "SSH_AUTH_SOCK";
+
 #ifdef WIN32
 bool pathsEqual(const string& a, const string& b) {
   string na = a, nb = b;
@@ -131,9 +133,12 @@ PortForwardSourceResponse PortForwardHandler::createSource(
     if (pfsr.has_source()) {
       source = pfsr.source();
     } else {
-      // Make a random file to forward the pipe
+      // Make a random file to forward the pipe. The agent follows sshd's
+      // /tmp/ssh-XXXXXX/agent.<pid> layout so agent switchers find it.
+      const bool isAgent = pfsr.environmentvariable() == AGENT_ENV_VAR;
       string sourcePattern =
-          GetTempDirectory() + string("et_forward_sock_XXXXXX");
+          GetTempDirectory() +
+          string(isAgent ? "ssh-XXXXXX" : "et_forward_sock_XXXXXX");
 #ifndef WIN32
       string sourceDirectory = string(mkdtemp(&sourcePattern[0]));
       FATAL_FAIL(::chmod(sourceDirectory.c_str(), S_IRUSR | S_IWUSR | S_IXUSR));
@@ -144,6 +149,11 @@ PortForwardSourceResponse PortForwardHandler::createSource(
 #endif
       temporaryDirectories.push_back(sourceDirectory);
       string sourcePath = string(sourceDirectory) + "/sock";
+#ifndef WIN32
+      if (isAgent) {
+        sourcePath = sourceDirectory + "/agent." + std::to_string(::getpid());
+      }
+#endif
 
       source.set_name(sourcePath);
       if (sourceName == nullptr) {
